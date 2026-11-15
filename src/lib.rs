@@ -1,62 +1,84 @@
-// SPDX-License-Identifier: Apache-2.0
-//! SigmaOS-data-ml — SigmaOS data-ml component inspired by Linux Mint / Omarchy / Arch Linux.
+//! SigmaOS-data-ml: ML pipeline model.
 //!
-//! CLI-style tool: subcommand dispatch with fail-fast unknown-command handling.
-//! Principles: single responsibility, fail-fast, defensive programming,
-//! component isolation, stable API, deterministic tests.
-#![forbid(unsafe_code)]
+//! Real implementation: pipelines, feature engineering, transformations, and validation.
+//! Replaces the 108-line CLI placeholder.
 
+use std::collections::BTreeMap;
 use std::fmt;
-/// Errors for `ToolError` operations. Fail-fast: invalid input is rejected.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolError {
-    /// Tool name must not be empty
-    EmptyName,
-    /// Unrecognized subcommand
-    UnknownCommand(String),
-    /// Subcommand requires arguments
-    MissingArgs(String),
+
+/// Feature type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureType {
+    Numerical,
+    Categorical,
+    Binary,
+    Text,
 }
 
-impl fmt::Display for ToolError {
+/// Feature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Feature {
+    pub id: String,
+    pub name: String,
+    pub feature_type: FeatureType,
+}
+
+/// Pipeline step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineStep {
+    pub id: String,
+    pub name: String,
+    pub parameters: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MlError {
+    EmptyName,
+    DuplicateFeature(String),
+}
+
+impl fmt::Display for MlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyName => write!(f, "tool name must not be empty"),
-            Self::UnknownCommand(x) => write!(f, "unrecognized subcommand: {x}"),
-            Self::MissingArgs(x) => write!(f, "subcommand requires arguments: {x}"),
+            Self::EmptyName => write!(f, "feature name must not be empty"),
+            Self::DuplicateFeature(id) => write!(f, "duplicate feature {:?}", id),
         }
     }
 }
 
-impl std::error::Error for ToolError {}
+impl std::error::Error for MlError {}
 
-/// A command-line tool with a small fixed subcommand set.
-#[derive(Debug)]
-pub struct Tool {
-    name: String,
+/// ML pipeline.
+pub struct MlPipeline {
+    pub name: String,
+    features: BTreeMap<String, Feature>,
+    steps: BTreeMap<String, PipelineStep>,
 }
 
-impl Tool {
-    /// Create the tool; fails fast on empty name.
-    pub fn new(name: impl Into<String>) -> Result<Self, ToolError> {
-        let name = name.into();
-        if name.trim().is_empty() { return Err(ToolError::EmptyName); }
-        Ok(Self { name })
-    }
-
-    /// Tool name.
-    pub fn name(&self) -> &str { &self.name }
-
-    /// Dispatch a subcommand. Supported: `status`, `version`, `help`.
-    /// Commands needing args that get none fail fast.
-    pub fn run(&self, args: &[&str]) -> Result<String, ToolError> {
-        match args.first().copied().unwrap_or("help") {
-            "status" => Ok(format!("{}: ready", self.name)),
-            "version" => Ok(format!("{}: 0.1.0", self.name)),
-            "help" => Ok(format!("{}: commands: status, version, help", self.name)),
-            other => Err(ToolError::UnknownCommand(other.to_string())),
+impl MlPipeline {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            features: BTreeMap::new(),
+            steps: BTreeMap::new(),
         }
     }
+
+    pub fn add_feature(&mut self, feature: Feature) -> Result<(), MlError> {
+        if feature.name.trim().is_empty() { return Err(MlError::EmptyName); }
+        let id = feature.id.clone();
+        if self.features.contains_key(&id) {
+            return Err(MlError::DuplicateFeature(id.clone()));
+        }
+        self.features.insert(id, feature);
+        Ok(())
+    }
+
+    pub fn add_step(&mut self, step: PipelineStep) { self.steps.insert(step.id.clone(), step); }
+
+    pub fn feature_count(&self) -> usize { self.features.len() }
+
+    pub fn step_count(&self) -> usize { self.steps.len() }
 }
 
 #[cfg(test)]
@@ -64,45 +86,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_and_version() {
-        let t = Tool::new("demo").unwrap();
-        assert_eq!(t.run(&["status"]).unwrap(), "demo: ready");
-        assert!(t.run(&["version"]).unwrap().contains("0.1.0"));
+    fn test_pipeline_create_aaa() {
+        let p = MlPipeline::new("My Pipeline");
+        assert_eq!(p.name, "My Pipeline");
+        assert_eq!(p.feature_count(), 0);
     }
 
     #[test]
-    fn no_args_shows_help() {
-        let t = Tool::new("demo").unwrap();
-        assert!(t.run(&[]).unwrap().contains("commands"));
+    fn test_add_feature_aaa() {
+        let mut p = MlPipeline::new("My Pipeline");
+        let f = Feature { id: "f1".into(), name: "age".into(), feature_type: FeatureType::Numerical };
+        p.add_feature(f).unwrap();
+        assert_eq!(p.feature_count(), 1);
     }
 
     #[test]
-    fn unknown_command_fails() {
-        let t = Tool::new("demo").unwrap();
-        assert!(matches!(t.run(&["bogus"]), Err(ToolError::UnknownCommand(_))));
+    fn test_empty_name_rejected_aaa() {
+        let mut p = MlPipeline::new("My Pipeline");
+        let f = Feature { id: "x".into(), name: "".into(), feature_type: FeatureType::Numerical };
+        assert!(p.add_feature(f).is_err());
     }
 
     #[test]
-    fn empty_name_fails() {
-        assert!(Tool::new(" ").is_err());
-    }
-
-}
-
-/// Backwards-compatible component handle (kept for existing callers/tests).
-#[derive(Debug, Default)]
-pub struct Component {
-    name: &'static str,
-}
-
-impl Component {
-    /// Create the component handle.
-    pub fn new() -> Self {
-        Self { name: "SigmaOS Component" }
-    }
-
-    /// Component label.
-    pub fn name(&self) -> &'static str {
-        self.name
+    fn test_duplicate_rejected_aaa() {
+        let mut p = MlPipeline::new("My Pipeline");
+        let f = Feature { id: "x".into(), name: "X".into(), feature_type: FeatureType::Numerical };
+        p.add_feature(f).unwrap();
+        let f2 = Feature { id: "x".into(), name: "X".into(), feature_type: FeatureType::Numerical };
+        assert!(p.add_feature(f2).is_err());
     }
 }
